@@ -35,30 +35,37 @@ class GenieWrapper:
     def __init__(self) -> None:
         self.model_base_dir = "./models"
         self.tmp_reference_dir = "./tmp_references"
-        self.reference_resource_server = "https://service.sc-viewer.top/convert/direct"
+        self.reference_resource_server = (
+            "https://service.sc-viewer.top/convert/direct/sounds/voice/events"
+        )
         self.output_dir = "./output"
+        os.makedirs(self.tmp_reference_dir, exist_ok=True)
+        os.makedirs(self.output_dir, exist_ok=True)
         self._tasks: Dict[str, TaskRecord] = {}
         self._queue: Deque[str] = deque()
         self._lock: threading.Lock = threading.Lock()
         self._condition: threading.Condition = threading.Condition(self._lock)
         self._worker: threading.Thread = threading.Thread(target=self._worker_loop, daemon=True)
         self._worker.start()
-    
+
     def _get_model_path(self, character_name: str) -> str:
-        return f"{self.model_base_dir}/{character_name}"
-    
+        return os.path.join(self.model_base_dir, character_name)
+
     def _get_resource_url(self, resource_audio_id: str) -> str:
         return f"{self.reference_resource_server}/{resource_audio_id}.m4a"
-    
+
     def _get_reference_audio_path(self, resource_audio_id: str) -> str:
-        audio_path = f"{self.tmp_reference_dir}/{resource_audio_id}.ogg"
+        # Support nested resource ids like "sounds/.../file".
+        normalized_resource = resource_audio_id.lstrip("/")
+        audio_path = os.path.join(self.tmp_reference_dir, f"{normalized_resource}.ogg")
+        os.makedirs(os.path.dirname(audio_path), exist_ok=True)
         if os.path.exists(audio_path):
             return audio_path
         # download and convert
         url = self._get_resource_url(resource_audio_id)
         download_and_convert_m4a_to_ogg(url, audio_path)
         return audio_path
-    
+
     def _load_character(self, character_name: str) -> None:
         onnx_model_dir = self._get_model_path(character_name)
         language = "jp"
@@ -72,7 +79,7 @@ class GenieWrapper:
         random_suffix = os.urandom(4).hex()
         timestamp = int(time.time())
         return f"{character_name}_{timestamp}_{random_suffix}"
-        
+
     def _get_output_save_path(self, task_id: str) -> str:
         return f"{self.output_dir}/{task_id}.wav"
 
@@ -88,7 +95,7 @@ class GenieWrapper:
             character_name=task["character_name"],
             text=task["text"],
             play=False,
-            split_sentence=True,
+            split_sentence=False,
             save_path=task["save_path"],
         )
 
@@ -129,7 +136,7 @@ class GenieWrapper:
             self._queue.append(task_id)
             self._condition.notify()
         return task_id
-    
+
     def get_task_status(self, task_id: str) -> TaskStatus:
         with self._lock:
             task = self._tasks.get(task_id)

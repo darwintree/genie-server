@@ -25,8 +25,4 @@ def download_and_convert_m4a_to_ogg(url: str, output_filename: str):
 
     except Exception as e:
         print(f"发生错误: {e}")
-
-download_and_convert_m4a_to_ogg(
-    url="https://service.sc-viewer.top/convert/direct/sounds/voice/events/special_communications/490103910/4901039100180.m4a",
-    output_filename="4901039100180.ogg"
-)
+        raise
