@@ -7,14 +7,14 @@ os.environ['Max_Cached_Reference_Audio'] = '3'
 
 def main():
     genie.load_character(
-        character_name='はづき',  # Replace with your character name
-        onnx_model_dir=r"./models/hazuki",  # Replace with the folder containing the ONNX model
-        language='jp',  # Replace with language code, e.g., 'en', 'zh', 'jp'
+        character_name="はづき",  # Replace with your character name
+        onnx_model_dir=r"./models/はづき",  # Replace with the folder containing the ONNX model
+        language="jp",  # Replace with language code, e.g., 'en', 'zh', 'jp'
     )
 
     genie.set_reference_audio(
-        character_name='はづき',  # Use the same character name as above
-        audio_path=r"./reference/4903001910010.ogg",  # Replace with path to your reference audio file
+        character_name="はづき",  # Use the same character name as above
+        audio_path=r"./tmp_references/special_communications/490300191/4903001910010.ogg",  # Replace with path to your reference audio file
         audio_text="お誕生日おめでとうございます、プロデューサーさん♪",  # Replace with the text corresponding to the reference audio
     )
 

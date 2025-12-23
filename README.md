@@ -9,7 +9,7 @@
 2. Run the server:
 
    ```bash
-   uvicorn server:app --reload --port 8001
+   uvicorn server:app --reload --port 12451
    ```
 
 3. Endpoints:
