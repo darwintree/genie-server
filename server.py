@@ -1,5 +1,9 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+import os
+from pathlib import Path
 
 from wrapper import GenieWrapper
 
@@ -19,11 +23,22 @@ class TaskStatusResponse(BaseModel):
     status: str
     pending: int
     save_path: str | None = None
+    save_path_compressed: str | None = None
     error: str | None = None
 
 
 wrapper = GenieWrapper()
 app = FastAPI(title="Genie TTS Server", version="0.1.0")
+BASE_STATIC_URL = os.getenv("BASE_STATIC_URL", "").rstrip("/")
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=".*",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.post("/tasks", response_model=CreateTaskResponse)
@@ -50,7 +65,21 @@ def get_task_status(task_id: str) -> TaskStatusResponse:
                 "pending": status["pending"],
             },
         )
+    if BASE_STATIC_URL:
+        if status.get("save_path"):
+            status["save_path"] = f"{BASE_STATIC_URL}/{Path(status['save_path']).name}"
+        if status.get("save_path_compressed"):
+            status["save_path_compressed"] = (
+                f"{BASE_STATIC_URL}/{Path(status['save_path_compressed']).name}"
+            )
     return TaskStatusResponse(**status)
+
+
+app.mount(
+    "/static",
+    StaticFiles(directory=wrapper.output_dir, check_dir=True),
+    name="static",
+)
 
 
 @app.get("/health")

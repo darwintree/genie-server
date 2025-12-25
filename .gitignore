@@ -14,3 +14,4 @@ output/
 reference/
 .DS_Store
 tmp_references
+.env

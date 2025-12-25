@@ -3,7 +3,10 @@ import os
 import time
 import threading
 from collections import deque
+from pathlib import Path
 from typing import Deque, Dict, Literal, Optional, TypedDict
+from pydub import AudioSegment
+from dotenv import load_dotenv
 
 TaskState = Literal["pending", "running", "completed", "failed"]
 TaskQueryState = Literal["pending", "running", "completed", "failed", "not_found"]
@@ -16,6 +19,7 @@ class TaskRecord(TypedDict):
     reference_audio_text: str
     text: str
     save_path: str
+    save_path_compressed: str
     status: TaskState
     error: Optional[str]
 
@@ -24,32 +28,52 @@ class TaskStatus(TypedDict, total=False):
     status: TaskQueryState
     pending: int
     save_path: str
+    save_path_compressed: str
     error: Optional[str]
 from downloader import download_and_convert_m4a_to_ogg
 
+# Load environment variables from .env if present.
+load_dotenv()
+
+def _get_env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
 # (Optional) You can set the number of cached character models and reference audios.
-os.environ['Max_Cached_Character_Models'] = '3'
-os.environ['Max_Cached_Reference_Audio'] = '3'
+os.environ["Max_Cached_Character_Models"] = os.getenv("MAX_CACHED_CHARACTER_MODELS", "1")
+os.environ["Max_Cached_Reference_Audio"] = os.getenv("MAX_CACHED_REFERENCE_AUDIO", "1")
 
 class GenieWrapper:
     def __init__(self) -> None:
-        self.model_base_dir = "./models"
-        self.tmp_reference_dir = "./tmp_references"
-        self.reference_resource_server = (
-            "https://service.sc-viewer.top/convert/direct/sounds/voice/events"
-        )
-        self.output_dir = "./output"
-        os.makedirs(self.tmp_reference_dir, exist_ok=True)
-        os.makedirs(self.output_dir, exist_ok=True)
+        self.model_base_dir = Path(os.getenv("MODEL_BASE_DIR", "./models"))
+        self.tmp_reference_dir = Path(os.getenv("TMP_REFERENCE_DIR", "./tmp_references"))
+        self.reference_resource_server = os.getenv("REFERENCE_RESOURCE_SERVER")
+        if not self.reference_resource_server:
+            raise ValueError("REFERENCE_RESOURCE_SERVER must be set in the environment.")
+        self.output_dir = Path(os.getenv("OUTPUT_DIR", "./output"))
+        self.tmp_reference_dir.mkdir(parents=True, exist_ok=True)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self._cleanup_interval_seconds = _get_env_int("CLEANUP_INTERVAL_SECONDS", 60 * 60)
+        self._cleanup_age_seconds = _get_env_int("CLEANUP_AGE_SECONDS", 24 * 60 * 60)
         self._tasks: Dict[str, TaskRecord] = {}
         self._queue: Deque[str] = deque()
         self._lock: threading.Lock = threading.Lock()
         self._condition: threading.Condition = threading.Condition(self._lock)
         self._worker: threading.Thread = threading.Thread(target=self._worker_loop, daemon=True)
         self._worker.start()
+        self._cleanup_worker: threading.Thread = threading.Thread(
+            target=self._cleanup_worker_loop,
+            daemon=True,
+        )
+        self._cleanup_worker.start()
 
     def _get_model_path(self, character_name: str) -> str:
-        return os.path.join(self.model_base_dir, character_name)
+        return str(self.model_base_dir / character_name)
 
     def _get_resource_url(self, resource_audio_id: str) -> str:
         return f"{self.reference_resource_server}/{resource_audio_id}.m4a"
@@ -57,14 +81,14 @@ class GenieWrapper:
     def _get_reference_audio_path(self, resource_audio_id: str) -> str:
         # Support nested resource ids like "sounds/.../file".
         normalized_resource = resource_audio_id.lstrip("/")
-        audio_path = os.path.join(self.tmp_reference_dir, f"{normalized_resource}.ogg")
-        os.makedirs(os.path.dirname(audio_path), exist_ok=True)
-        if os.path.exists(audio_path):
-            return audio_path
+        audio_path = self.tmp_reference_dir / f"{normalized_resource}.ogg"
+        audio_path.parent.mkdir(parents=True, exist_ok=True)
+        if audio_path.exists():
+            return str(audio_path)
         # download and convert
         url = self._get_resource_url(resource_audio_id)
-        download_and_convert_m4a_to_ogg(url, audio_path)
-        return audio_path
+        download_and_convert_m4a_to_ogg(url, str(audio_path))
+        return str(audio_path)
 
     def _load_character(self, character_name: str) -> None:
         onnx_model_dir = self._get_model_path(character_name)
@@ -81,7 +105,33 @@ class GenieWrapper:
         return f"{character_name}_{timestamp}_{random_suffix}"
 
     def _get_output_save_path(self, task_id: str) -> str:
-        return f"{self.output_dir}/{task_id}.wav"
+        return str(self.output_dir / f"{task_id}.wav")
+
+    def _get_output_save_path_compressed(self, task_id: str) -> str:
+        return str(self.output_dir / f"{task_id}.ogg")
+
+    def _compress_wav_to_ogg(self, wav_path: str, ogg_path: str) -> None:
+        audio = AudioSegment.from_file(wav_path, format="wav")
+        audio.export(ogg_path, format="ogg")
+
+    def _cleanup_old_wavs(self) -> None:
+        now = time.time()
+        for path in self.output_dir.iterdir():
+            if path.suffix != ".wav":
+                continue
+            try:
+                if now - path.stat().st_mtime >= self._cleanup_age_seconds:
+                    path.unlink()
+            except FileNotFoundError:
+                continue
+
+    def _cleanup_worker_loop(self) -> None:
+        while True:
+            try:
+                self._cleanup_old_wavs()
+            except Exception:
+                pass
+            time.sleep(self._cleanup_interval_seconds)
 
     def _process_task(self, task: TaskRecord) -> None:
         audio_path = self._get_reference_audio_path(task["reference_audio_id"])
@@ -98,6 +148,7 @@ class GenieWrapper:
             split_sentence=False,
             save_path=task["save_path"],
         )
+        self._compress_wav_to_ogg(task["save_path"], task["save_path_compressed"])
 
     def _worker_loop(self) -> None:
         while True:
@@ -121,6 +172,7 @@ class GenieWrapper:
     def create_tts_task(self, character_name: str, reference_audio_id: str, reference_audio_text: str, text: str) -> str:
         task_id = self._get_task_id(character_name)
         save_path = self._get_output_save_path(task_id)
+        save_path_compressed = self._get_output_save_path_compressed(task_id)
         task: TaskRecord = {
             "task_id": task_id,
             "character_name": character_name,
@@ -128,6 +180,7 @@ class GenieWrapper:
             "reference_audio_text": reference_audio_text,
             "text": text,
             "save_path": save_path,
+            "save_path_compressed": save_path_compressed,
             "status": "pending",
             "error": None,
         }
@@ -147,9 +200,12 @@ class GenieWrapper:
                     "pending": pending,
                 }
                 return not_found
-            return {
+            response: TaskStatus = {
                 "status": task["status"],
                 "pending": pending,
-                "save_path": task.get("save_path"),
                 "error": task.get("error"),
             }
+            if task["status"] == "completed":
+                response["save_path"] = task.get("save_path")
+                response["save_path_compressed"] = task.get("save_path_compressed")
+            return response

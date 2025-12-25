@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.13'",
@@ -323,6 +323,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "genie-tts" },
     { name = "pydub" },
+    { name = "python-dotenv" },
     { name = "requests" },
     { name = "uvicorn" },
 ]
@@ -332,6 +333,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.111.0" },
     { name = "genie-tts", specifier = ">=2.0.2" },
     { name = "pydub", specifier = ">=0.25.1" },
+    { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "requests", specifier = ">=2.32.5" },
     { name = "uvicorn", specifier = ">=0.30.0" },
 ]
