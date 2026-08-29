@@ -1,12 +1,17 @@
-import genie_tts as genie
 import os
-import time
 import threading
+import time
 from collections import deque
 from pathlib import Path
-from typing import Deque, Dict, Literal, Optional, TypedDict
-from pydub import AudioSegment
+from queue import Full
+from typing import Deque, Dict, Literal, Optional, TypedDict, cast
+
+import genie_tts as genie
 from dotenv import load_dotenv
+from pydub import AudioSegment
+
+from downloader import download_and_convert_m4a_to_ogg
+from r2_storage import R2Storage
 
 TaskState = Literal["pending", "running", "completed", "failed"]
 TaskQueryState = Literal["pending", "running", "completed", "failed", "not_found"]
@@ -18,8 +23,10 @@ class TaskRecord(TypedDict):
     reference_audio_id: str
     reference_audio_text: str
     text: str
-    save_path: str
-    save_path_compressed: str
+    wav_path: str
+    ogg_path: str
+    wav_key: Optional[str]
+    ogg_key: Optional[str]
     status: TaskState
     error: Optional[str]
 
@@ -30,10 +37,11 @@ class TaskStatus(TypedDict, total=False):
     save_path: str
     save_path_compressed: str
     error: Optional[str]
-from downloader import download_and_convert_m4a_to_ogg
+
 
 # Load environment variables from .env if present.
 load_dotenv()
+
 
 def _get_env_int(name: str, default: int) -> int:
     value = os.getenv(name)
@@ -44,22 +52,41 @@ def _get_env_int(name: str, default: int) -> int:
     except ValueError:
         return default
 
+
+def _get_required_env(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise ValueError(f"{name} must be set in the environment.")
+    return value
+
+
+def _get_positive_env_int(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer.") from exc
+    if value < 1:
+        raise ValueError(f"{name} must be a positive integer.")
+    return value
+
+
 # (Optional) You can set the number of cached character models and reference audios.
 os.environ["Max_Cached_Character_Models"] = os.getenv("MAX_CACHED_CHARACTER_MODELS", "1")
 os.environ["Max_Cached_Reference_Audio"] = os.getenv("MAX_CACHED_REFERENCE_AUDIO", "1")
 
+
 class GenieWrapper:
-    def __init__(self) -> None:
+    def __init__(self, storage: R2Storage | None = None) -> None:
         self.model_base_dir = Path(os.getenv("MODEL_BASE_DIR", "./models"))
         self.tmp_reference_dir = Path(os.getenv("TMP_REFERENCE_DIR", "./tmp_references"))
-        self.reference_resource_server = os.getenv("REFERENCE_RESOURCE_SERVER")
-        if not self.reference_resource_server:
-            raise ValueError("REFERENCE_RESOURCE_SERVER must be set in the environment.")
+        self.reference_resource_server = _get_required_env("REFERENCE_RESOURCE_SERVER")
         self.output_dir = Path(os.getenv("OUTPUT_DIR", "./output"))
+        self._storage = storage if storage is not None else R2Storage()
         self.tmp_reference_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self._cleanup_interval_seconds = _get_env_int("CLEANUP_INTERVAL_SECONDS", 60 * 60)
         self._cleanup_age_seconds = _get_env_int("CLEANUP_AGE_SECONDS", 24 * 60 * 60)
+        self._max_pending_tasks = _get_positive_env_int("MAX_PENDING_TASKS", 20)
         self._tasks: Dict[str, TaskRecord] = {}
         self._queue: Deque[str] = deque()
         self._lock: threading.Lock = threading.Lock()
@@ -104,20 +131,20 @@ class GenieWrapper:
         timestamp = int(time.time())
         return f"{character_name}_{timestamp}_{random_suffix}"
 
-    def _get_output_save_path(self, task_id: str) -> str:
+    def _get_wav_path(self, task_id: str) -> str:
         return str(self.output_dir / f"{task_id}.wav")
 
-    def _get_output_save_path_compressed(self, task_id: str) -> str:
+    def _get_ogg_path(self, task_id: str) -> str:
         return str(self.output_dir / f"{task_id}.ogg")
 
     def _compress_wav_to_ogg(self, wav_path: str, ogg_path: str) -> None:
         audio = AudioSegment.from_file(wav_path, format="wav")
-        audio.export(ogg_path, format="ogg")
+        audio.export(ogg_path, format="ogg", codec="libopus", bitrate="48k")
 
-    def _cleanup_old_wavs(self) -> None:
+    def _cleanup_old_outputs(self) -> None:
         now = time.time()
         for path in self.output_dir.iterdir():
-            if path.suffix != ".wav":
+            if path.suffix not in {".wav", ".ogg"}:
                 continue
             try:
                 if now - path.stat().st_mtime >= self._cleanup_age_seconds:
@@ -128,7 +155,7 @@ class GenieWrapper:
     def _cleanup_worker_loop(self) -> None:
         while True:
             try:
-                self._cleanup_old_wavs()
+                self._cleanup_old_outputs()
             except Exception:
                 pass
             time.sleep(self._cleanup_interval_seconds)
@@ -146,9 +173,20 @@ class GenieWrapper:
             text=task["text"],
             play=False,
             split_sentence=False,
-            save_path=task["save_path"],
+            save_path=task["wav_path"],
         )
-        self._compress_wav_to_ogg(task["save_path"], task["save_path_compressed"])
+        self._compress_wav_to_ogg(task["wav_path"], task["ogg_path"])
+        task["wav_key"], task["ogg_key"] = self._storage.upload_audio(
+            task["task_id"],
+            task["wav_path"],
+            task["ogg_path"],
+        )
+        for path in (task["wav_path"], task["ogg_path"]):
+            try:
+                Path(path).unlink(missing_ok=True)
+            except OSError:
+                # The periodic cleanup worker will retry stale local outputs.
+                pass
 
     def _worker_loop(self) -> None:
         while True:
@@ -171,20 +209,24 @@ class GenieWrapper:
 
     def create_tts_task(self, character_name: str, reference_audio_id: str, reference_audio_text: str, text: str) -> str:
         task_id = self._get_task_id(character_name)
-        save_path = self._get_output_save_path(task_id)
-        save_path_compressed = self._get_output_save_path_compressed(task_id)
+        wav_path = self._get_wav_path(task_id)
+        ogg_path = self._get_ogg_path(task_id)
         task: TaskRecord = {
             "task_id": task_id,
             "character_name": character_name,
             "reference_audio_id": reference_audio_id,
             "reference_audio_text": reference_audio_text,
             "text": text,
-            "save_path": save_path,
-            "save_path_compressed": save_path_compressed,
+            "wav_path": wav_path,
+            "ogg_path": ogg_path,
+            "wav_key": None,
+            "ogg_key": None,
             "status": "pending",
             "error": None,
         }
         with self._condition:
+            if len(self._queue) >= self._max_pending_tasks:
+                raise Full
             self._tasks[task_id] = task
             self._queue.append(task_id)
             self._condition.notify()
@@ -206,6 +248,6 @@ class GenieWrapper:
                 "error": task.get("error"),
             }
             if task["status"] == "completed":
-                response["save_path"] = task.get("save_path")
-                response["save_path_compressed"] = task.get("save_path_compressed")
+                response["save_path"] = cast(str, task["wav_key"])
+                response["save_path_compressed"] = cast(str, task["ogg_key"])
             return response

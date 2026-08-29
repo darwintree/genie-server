@@ -1,16 +1,25 @@
 ## FastAPI Server
 
+Deployment and operations: [DEPLOYMENT.md](DEPLOYMENT.md)
+
+Copy `worker/wrangler.example.jsonc` to `worker/wrangler.jsonc` and fill in
+your Cloudflare resource identifiers before deploying the Worker. The local
+configuration is ignored by Git.
+
 1. Install dependencies:
 
    ```bash
-   uv pip install .
+   uv sync --locked
    ```
 
 2. Run the server:
 
    ```bash
-   uvicorn server:app --reload --port 12451
+   uv run uvicorn server:app --reload --port 12451
    ```
+
+   The server uploads completed WAV and OGG files to Cloudflare R2. Copy
+   `.env.example` to `.env` and configure the R2 credentials before starting.
 
 3. Endpoints:
    - `POST /tasks` – create a TTS task. Body:
@@ -26,3 +35,11 @@
 
    - `GET /tasks/{task_id}` – query task status.
    - `GET /health` – readiness probe.
+
+   Task creation is limited to 6 requests per minute and 100 requests per day
+   per client IP. `MAX_PENDING_TASKS` controls the pending queue size and
+   defaults to `20`.
+
+4. Configure two R2 lifecycle rules:
+   - Delete objects under `wav/` after 14 days.
+   - Delete objects under `ogg/` after 30 days.

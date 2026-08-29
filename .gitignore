@@ -10,8 +10,18 @@ wheels/
 .venv
 GenieData/
 models/
+GPT-SoVITS/
 output/
 reference/
 .DS_Store
 tmp_references
 .env
+node_modules/
+.wrangler/
+
+# Cloudflare account-specific Worker configuration
+worker/wrangler.jsonc
+worker/worker-configuration.d.ts
+
+# Local implementation notes
+docs/traces/

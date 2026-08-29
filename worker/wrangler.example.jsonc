@@ -1,0 +1,42 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "<WORKER_NAME>",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-28",
+  "compatibility_flags": ["nodejs_compat"],
+  "ratelimits": [
+    {
+      "name": "CREATE_TASK_RATE_LIMITER",
+      "namespace_id": "<CREATE_TASK_RATE_LIMIT_NAMESPACE_ID>",
+      "simple": {
+        "limit": 6,
+        "period": 60
+      }
+    },
+    {
+      "name": "TASK_STATUS_RATE_LIMITER",
+      "namespace_id": "<TASK_STATUS_RATE_LIMIT_NAMESPACE_ID>",
+      "simple": {
+        "limit": 60,
+        "period": 60
+      }
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "AUDIO",
+      "bucket_name": "<R2_BUCKET_NAME>",
+      "remote": true
+    }
+  ],
+  "vpc_services": [
+    {
+      "binding": "GENIE_API",
+      "service_id": "<VPC_SERVICE_ID>",
+      "remote": true
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

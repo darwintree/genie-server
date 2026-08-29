@@ -1,0 +1,16 @@
+{
+  "name": "genie-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node --test src/index.test.ts",
+    "types": "wrangler types"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.0",
+    "typescript": "^7.0.2",
+    "wrangler": "4.127.0"
+  }
+}

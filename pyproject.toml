@@ -11,4 +11,6 @@ dependencies = [
     "requests>=2.32.5",
     "fastapi>=0.111.0",
     "uvicorn>=0.30.0",
+    "boto3>=1.43.82",
+    "slowapi>=0.1.10",
 ]
