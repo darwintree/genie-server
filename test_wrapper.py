@@ -36,6 +36,8 @@ class ProcessTaskTest(unittest.TestCase):
             wrapper._storage.upload_audio.return_value = (
                 "wav/task.wav",
                 "ogg/task.ogg",
+                "2026-09-12T00:00:00+00:00",
+                "2026-09-28T00:00:00+00:00",
             )
             wrapper._get_reference_audio_path = Mock(return_value="reference.ogg")
             wrapper._load_character = Mock()
@@ -52,6 +54,8 @@ class ProcessTaskTest(unittest.TestCase):
                 "ogg_path": str(ogg_path),
                 "wav_key": None,
                 "ogg_key": None,
+                "wav_expires_at": None,
+                "ogg_expires_at": None,
                 "status": "running",
                 "error": None,
             }
@@ -71,6 +75,8 @@ class ProcessTaskTest(unittest.TestCase):
             )
             self.assertEqual(task["wav_key"], "wav/task.wav")
             self.assertEqual(task["ogg_key"], "ogg/task.ogg")
+            self.assertEqual(task["wav_expires_at"], "2026-09-12T00:00:00+00:00")
+            self.assertEqual(task["ogg_expires_at"], "2026-09-28T00:00:00+00:00")
             self.assertFalse(wav_path.exists())
             self.assertFalse(ogg_path.exists())
 
@@ -105,9 +111,17 @@ class R2StorageTest(unittest.TestCase):
     @patch("r2_storage.boto3.client")
     def test_upload_audio_sets_keys_and_content_types(self, boto_client: Mock) -> None:
         client = boto_client.return_value
+        client.head_object.side_effect = [
+            {
+                "Expiration": 'expiry-date="Sat, 12 Sep 2026 00:00:00 GMT", rule-id="expire-wav"'
+            },
+            {
+                "Expiration": 'expiry-date="Mon, 28 Sep 2026 00:00:00 GMT", rule-id="expire-ogg"'
+            },
+        ]
         storage = R2Storage()
 
-        keys = storage.upload_audio("task", "task.wav", "task.ogg")
+        result = storage.upload_audio("task", "task.wav", "task.ogg")
 
         boto_client.assert_called_once_with(
             service_name="s3",
@@ -116,7 +130,15 @@ class R2StorageTest(unittest.TestCase):
             aws_secret_access_key="secret",
             region_name="auto",
         )
-        self.assertEqual(keys, ("wav/task.wav", "ogg/task.ogg"))
+        self.assertEqual(
+            result,
+            (
+                "wav/task.wav",
+                "ogg/task.ogg",
+                "2026-09-12T00:00:00+00:00",
+                "2026-09-28T00:00:00+00:00",
+            ),
+        )
         self.assertEqual(
             client.upload_file.call_args_list,
             [
@@ -132,6 +154,13 @@ class R2StorageTest(unittest.TestCase):
                     "ogg/task.ogg",
                     ExtraArgs={"ContentType": "audio/ogg"},
                 ),
+            ],
+        )
+        self.assertEqual(
+            client.head_object.call_args_list,
+            [
+                call(Bucket="audio", Key="wav/task.wav"),
+                call(Bucket="audio", Key="ogg/task.ogg"),
             ],
         )
 

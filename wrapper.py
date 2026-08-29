@@ -27,6 +27,8 @@ class TaskRecord(TypedDict):
     ogg_path: str
     wav_key: Optional[str]
     ogg_key: Optional[str]
+    wav_expires_at: Optional[str]
+    ogg_expires_at: Optional[str]
     status: TaskState
     error: Optional[str]
 
@@ -36,6 +38,8 @@ class TaskStatus(TypedDict, total=False):
     pending: int
     save_path: str
     save_path_compressed: str
+    wav_expires_at: str
+    ogg_expires_at: str
     error: Optional[str]
 
 
@@ -176,7 +180,12 @@ class GenieWrapper:
             save_path=task["wav_path"],
         )
         self._compress_wav_to_ogg(task["wav_path"], task["ogg_path"])
-        task["wav_key"], task["ogg_key"] = self._storage.upload_audio(
+        (
+            task["wav_key"],
+            task["ogg_key"],
+            task["wav_expires_at"],
+            task["ogg_expires_at"],
+        ) = self._storage.upload_audio(
             task["task_id"],
             task["wav_path"],
             task["ogg_path"],
@@ -221,6 +230,8 @@ class GenieWrapper:
             "ogg_path": ogg_path,
             "wav_key": None,
             "ogg_key": None,
+            "wav_expires_at": None,
+            "ogg_expires_at": None,
             "status": "pending",
             "error": None,
         }
@@ -250,4 +261,8 @@ class GenieWrapper:
             if task["status"] == "completed":
                 response["save_path"] = cast(str, task["wav_key"])
                 response["save_path_compressed"] = cast(str, task["ogg_key"])
+                if task["wav_expires_at"]:
+                    response["wav_expires_at"] = task["wav_expires_at"]
+                if task["ogg_expires_at"]:
+                    response["ogg_expires_at"] = task["ogg_expires_at"]
             return response

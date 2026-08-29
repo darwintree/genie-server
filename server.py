@@ -27,6 +27,8 @@ class TaskStatusResponse(BaseModel):
     pending: int
     save_path: str | None = None
     save_path_compressed: str | None = None
+    wav_expires_at: str | None = None
+    ogg_expires_at: str | None = None
     error: str | None = None
 
 

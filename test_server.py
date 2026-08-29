@@ -24,6 +24,7 @@ class ServerLimitTest(unittest.TestCase):
     def setUp(self) -> None:
         self.backend.create_tts_task.reset_mock(return_value=True, side_effect=True)
         self.backend.create_tts_task.return_value = "task"
+        self.backend.get_task_status.reset_mock(return_value=True, side_effect=True)
 
     @staticmethod
     def _payload() -> dict[str, str]:
@@ -56,6 +57,32 @@ class ServerLimitTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.headers["retry-after"], "60")
+
+    def test_returns_audio_expirations(self) -> None:
+        self.backend.get_task_status.return_value = {
+            "status": "completed",
+            "pending": 0,
+            "save_path": "wav/task.wav",
+            "save_path_compressed": "ogg/task.ogg",
+            "wav_expires_at": "2026-09-12T00:00:00+00:00",
+            "ogg_expires_at": "2026-09-28T00:00:00+00:00",
+        }
+
+        response = self.client.get("/tasks/task")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "status": "completed",
+                "pending": 0,
+                "save_path": "https://example.test/audio/wav/task.wav",
+                "save_path_compressed": "https://example.test/audio/ogg/task.ogg",
+                "wav_expires_at": "2026-09-12T00:00:00+00:00",
+                "ogg_expires_at": "2026-09-28T00:00:00+00:00",
+                "error": None,
+            },
+        )
 
 
 if __name__ == "__main__":
